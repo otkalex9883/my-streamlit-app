@@ -5,12 +5,13 @@ import os
 import re
 import sys
 import locale
+from PIL import Image, ImageDraw  # 추가
 
 # --- 한글 달력 및 요일을 위한 locale 설정 ---
 try:
     locale.setlocale(locale.LC_TIME, 'ko_KR.UTF-8')
 except locale.Error:
-    pass
+    pass  # 환경에 한글 Locale이 없을 때는 무시
 
 # --- 구글 Vision 서비스 계정 키파일 환경설정 ---
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
@@ -122,6 +123,7 @@ st.markdown(
 st.markdown('<div class="title">AI 일부인 검사기</div>', unsafe_allow_html=True)
 st.write("")
 
+# 세션 상태 변수 초기화
 if "product_input" not in st.session_state:
     st.session_state.product_input = ""
 if "auto_complete_show" not in st.session_state:
@@ -282,25 +284,17 @@ if st.session_state.confirm_success:
             - 0000년00월00일
         """
         date_str = date_str.strip()
-        # 1. 0000.00.00, 0000-00-00, 0000/00/00 → .으로 변환
         match = re.match(r"(\d{4})[./-](\d{2})[./-](\d{2})", date_str)
         if match:
             return f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
-
-        # 2. '0000년00월00일' 케이스 (공백 없어도 됨)
         match_kor = re.match(r"(\d{4})\s*년\s*(\d{2})\s*월\s*(\d{2})\s*일", date_str)
         if match_kor:
             return f"{match_kor.group(1)}.{match_kor.group(2)}.{match_kor.group(3)}"
-
-        # 3. 추후 다른 패턴 확장 자리 (코드 유지보수/추가 용이)
-        # 새 패턴이 필요하면 여기에 elif/return 추가
-
-        return date_str  # 인식 실패시 원문 반환
+        return date_str
 
     def detect_expiry_with_ocr(image_stream):
         """
-        구글 클라우드 Vision으로 이미지 OCR, 텍스트 추출 후
-        다양한 패턴의 소비기한을 '0000.00.00' 포맷으로 변환해 반환.
+        OCR로 인식된 날짜 문자열(norm), 전체텍스트, 그리고 해당 바운딩박스 좌표를 반환
         """
         client = vision.ImageAnnotatorClient()
         content = image_stream.read()
@@ -309,61 +303,85 @@ if st.session_state.confirm_success:
         texts = response.text_annotations
 
         if not texts:
-            return None, None
+            return None, None, None
 
-        # OCR 전체 텍스트
         full_text = texts[0].description.replace('\n', ' ').replace('\r', ' ')
 
-        # 패턴 목록: (정규식, group index)
+        # 날짜 패턴 인식
         patterns = [
             # 0000.00.00, 0000/00/00, 0000-00-00
             (r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}[./-]\d{2}[./-]\d{2})", 3),
             # 0000년00월00일
-            (r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}\s*년\s*\d{2}\s*월\s*\d{2}\s*일)", 3),
+            (r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}\s*년\s*\d{2}\s*월\s*\d{2}\s*일)", 3)
         ]
+        wanted_raw = None
         for patt, idx in patterns:
             match = re.search(patt, full_text)
             if match:
-                norm = normalize_expiry_date(match.group(idx))
-                return norm, full_text
+                wanted_raw = match.group(idx)
+                break
 
-        # 3. 모든 숫자형 날짜중 첫번째
-        all_date = re.findall(r"\d{4}[./-]\d{2}[./-]\d{2}", full_text)
-        if all_date:
-            normalized = normalize_expiry_date(all_date[0])
-            return normalized, full_text
+        # 모든 숫자형 날짜중 첫번째
+        if wanted_raw is None:
+            all_date = re.findall(r"\d{4}[./-]\d{2}[./-]\d{2}", full_text)
+            if all_date:
+                wanted_raw = all_date[0]
 
-        # 4. 모든 '0000년00월00일' 패턴 중 첫번째
-        all_kordate = re.findall(r"\d{4}\s*년\s*\d{2}\s*월\s*\d{2}\s*일", full_text)
-        if all_kordate:
-            normalized = normalize_expiry_date(all_kordate[0])
-            return normalized, full_text
+        # 모든 '0000년00월00일' 패턴 중 첫번째
+        if wanted_raw is None:
+            all_kordate = re.findall(r"\d{4}\s*년\s*\d{2}\s*월\s*\d{2}\s*일", full_text)
+            if all_kordate:
+                wanted_raw = all_kordate[0]
 
-        return None, full_text
+        norm = normalize_expiry_date(wanted_raw) if wanted_raw else None
+
+        # 바운딩박스 탐색 (texts[1:]에 각 단어/문자열 위치정보가 있음)
+        expiry_box = None
+        if wanted_raw:
+            ref = wanted_raw.replace(' ', '').replace('.', '').replace('-', '').replace('/', '')\
+                                    .replace('년', '').replace('월', '').replace('일', '')
+            min_dist = float('inf')
+            for txt in texts[1:]:
+                value = txt.description.replace(' ', '').replace('.', '').replace('-', '').replace('/', '')\
+                                       .replace('년', '').replace('월', '').replace('일', '')
+                if value and ref in value:
+                    if len(value) < min_dist:
+                        expiry_box = txt.bounding_poly
+                        min_dist = len(value)
+        return norm, full_text, expiry_box
+
+    def draw_bounding_box(image_stream, bounding_poly):
+        """
+        PIL을 이용해 원본 업로드 이미지를 열고,
+        bounding_poly(구글 Poly좌표 4개) 기준으로 빨간 네모박스를 그려 반환.
+        """
+        image_stream.seek(0)
+        pil_img = Image.open(image_stream).convert("RGB")
+        draw = ImageDraw.Draw(pil_img)
+        if bounding_poly:
+            points = [(vertex.x, vertex.y) for vertex in bounding_poly.vertices]
+            if len(points) == 4:
+                draw.line(points + [points[0]], width=4, fill=(220, 20, 60))
+        return pil_img
 
     # 업로드 파일이 있으면 OCR 수행
     if uploaded_file is not None:
-        expiry, ocr_fulltext = detect_expiry_with_ocr(uploaded_file)
+        expiry, ocr_fulltext, expiry_box = detect_expiry_with_ocr(uploaded_file)
         st.session_state.ocr_result = expiry
 
         if expiry:
-            # 결과 표시 영역
-            cols = st.columns([1, 1]) if False else [None, None]  # 추후 2단 레이아웃 용도(현재는 1단)
-            with st.container():
-                st.markdown("""
-                <div style="display: flex; flex-direction: column; align-items: center;">
-                """, unsafe_allow_html=True)
-                # 1. OCR 소비기한
-                st.info(f"OCR 소비기한: {expiry}")
-                # 2. 일치/불일치
-                if expiry == st.session_state.target_date_value:
-                    st.markdown(f'<div class="big-blue">일치</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="big-red">불일치</div>', unsafe_allow_html=True)
-                    st.write(f"목표일부인: {st.session_state.target_date_value}")
-                # 3. 사진 (적절히 모바일에 맞는 크기로)
-                st.image(uploaded_file, caption="업로드한 이미지", use_column_width=True, output_format="JPEG", channels="RGB")
-                st.markdown("</div>", unsafe_allow_html=True)
-        else:
-            st.error("일부인이 인식되지 않습니다.\n\n(사진 재촬영이나 명확한 부분으로 다시 시도해 주세요.)")
-            st.session_state.ocr_result = None
+            # 원본 이미지와 붉은 네모 표시
+            uploaded_file.seek(0)
+            annotated_img = draw_bounding_box(uploaded_file, expiry_box)
+            st.info(f"OCR 소비기한: {expiry}")
+            if expiry == st.session_state.target_date_value:
+                st.markdown(
+                    f'<div class="big-blue">일치</div>',
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f'<div class="big-red">불일치</div>',
+                    unsafe_allow_html=True
+                )
+                st.write(f"목표일부인: {st.session_state
