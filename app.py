@@ -5,16 +5,19 @@ import os
 import re
 import sys
 
-# [1] Google Vision 키 환경설정
-# ==============================
-# 클라우드 환경: secrets 에서 json을 파일로 저장해 환경변수 등록
+# --- 구글 Vision 서비스 계정 키파일 환경설정 및 상태 출력 (디버깅용) ---
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
     key_path = "/tmp/gcpkey.json"
     with open(key_path, "w") as f:
         f.write(st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
-# 로컬(Windows 등)에서는 필요에 따라 아래 줄 활성화(환경에 따라 수정)
-# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\20250282\Desktop\ilbuin\project-58e0d7a0-d3b8-4772-881-c5232d1ddf9e.json"
+
+    # 디버깅: 키파일 생성 및 환경변수 값 화면 출력
+    st.write(f"환경변수 GOOGLE_APPLICATION_CREDENTIALS: {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}")
+    st.write(f"키파일 생성됨: {os.path.exists(key_path)}")
+else:
+    st.error("GOOGLE_APPLICATION_CREDENTIALS_JSON가 secrets에 없습니다!")
+
 from google.cloud import vision
 
 product_db =  {
@@ -84,10 +87,6 @@ product_db =  {
     "한컵 콘샐러드": 1,
     "한컵 코울슬로": 1
 }
-
-# ==============================
-
-
 st.markdown(
     """
     <style>
@@ -119,6 +118,7 @@ st.markdown(
 st.markdown('<div class="title">AI 일부인 검사기</div>', unsafe_allow_html=True)
 st.write("")
 
+# 세션 상태 변수 초기화
 if "product_input" not in st.session_state:
     st.session_state.product_input = ""
 if "auto_complete_show" not in st.session_state:
@@ -144,7 +144,7 @@ def reset_all():
     st.session_state.target_date_value = ""
     st.session_state.ocr_result = None
 
-# --- 제품명 입력 및 자동완성 ---
+# --- 제품명 입력과 자동완성 ---
 st.write("제품명을 입력하세요")
 
 def on_change_input():
@@ -335,8 +335,7 @@ if st.session_state.confirm_success:
             st.session_state.ocr_result = None
 
 # --------------------------------------------------------------------------
-# 각주
-# - 이 코드는 구글 Vision 서비스 계정키 등록을 클라우드/로컬 모두 지원.
-# - OCR/패턴매칭 자세히, 대다수 모바일/스캐너/카메라 이미지, PDF 호환.
-# - 주요 흐름 주석으로 안내. 추가 요구에 따라 UX/UI 일부 변경 쉬움.
-# ------------------------------------------------------------------------
+# 이 코드는 구글 Vision 서비스 계정키 등록을 클라우드/로컬 모두 지원.
+# st.write로 인증 파일 및 환경변수 상태를 화면에서 확인 가능.
+# 요구에 따라 제품 DB와 날짜 처리, OCR, UI/UX도 자유롭게 커스텀 가능.
+# --------------------------------------------------------------------------
