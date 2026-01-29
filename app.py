@@ -10,7 +10,7 @@ import locale
 try:
     locale.setlocale(locale.LC_TIME, 'ko_KR.UTF-8')
 except locale.Error:
-    pass  # 환경에 한글 Locale이 없을 때는 무시
+    pass
 
 # --- 구글 Vision 서비스 계정 키파일 환경설정 ---
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
@@ -122,7 +122,6 @@ st.markdown(
 st.markdown('<div class="title">AI 일부인 검사기</div>', unsafe_allow_html=True)
 st.write("")
 
-# 세션 상태 변수 초기화
 if "product_input" not in st.session_state:
     st.session_state.product_input = ""
 if "auto_complete_show" not in st.session_state:
@@ -348,18 +347,23 @@ if st.session_state.confirm_success:
         st.session_state.ocr_result = expiry
 
         if expiry:
-            st.info(f"OCR 소비기한: {expiry}")
-            if expiry == st.session_state.target_date_value:
-                st.markdown(
-                    f'<div class="big-blue">일치</div>',
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(
-                    f'<div class="big-red">불일치</div>',
-                    unsafe_allow_html=True
-                )
-                st.write(f"목표일부인: {st.session_state.target_date_value}")
+            # 결과 표시 영역
+            cols = st.columns([1, 1]) if False else [None, None]  # 추후 2단 레이아웃 용도(현재는 1단)
+            with st.container():
+                st.markdown("""
+                <div style="display: flex; flex-direction: column; align-items: center;">
+                """, unsafe_allow_html=True)
+                # 1. OCR 소비기한
+                st.info(f"OCR 소비기한: {expiry}")
+                # 2. 일치/불일치
+                if expiry == st.session_state.target_date_value:
+                    st.markdown(f'<div class="big-blue">일치</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div class="big-red">불일치</div>', unsafe_allow_html=True)
+                    st.write(f"목표일부인: {st.session_state.target_date_value}")
+                # 3. 사진 (적절히 모바일에 맞는 크기로)
+                st.image(uploaded_file, caption="업로드한 이미지", use_column_width=True, output_format="JPEG", channels="RGB")
+                st.markdown("</div>", unsafe_allow_html=True)
         else:
             st.error("일부인이 인식되지 않습니다.\n\n(사진 재촬영이나 명확한 부분으로 다시 시도해 주세요.)")
             st.session_state.ocr_result = None
