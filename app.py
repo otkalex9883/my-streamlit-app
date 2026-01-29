@@ -3,10 +3,11 @@ import datetime
 import io
 import os
 import re
+import sys
 
 from google.cloud import vision
 
-product_db = {
+product_db =  {
     "아삭 오이 피클": 6,
     "아삭 오이&무 피클": 6,
     "스위트 오이피클": 12,
@@ -73,6 +74,18 @@ product_db = {
     "한컵 콘샐러드": 1,
     "한컵 코울슬로": 1
 }
+
+# ==============================
+# [1] Google Vision 키 환경설정
+# ==============================
+# 클라우드 환경: secrets 에서 json을 파일로 저장해 환경변수 등록
+if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
+    key_path = "/tmp/gcpkey.json"
+    with open(key_path, "w") as f:
+        f.write(st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
+# 로컬(Windows 등)에서는 필요에 따라 아래 줄 활성화(환경에 따라 수정)
+# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\20250282\Desktop\ilbuin\project-58e0d7a0-d3b8-4772-881-c5232d1ddf9e.json"
 
 st.markdown(
     """
@@ -257,23 +270,14 @@ if st.session_state.confirm_success:
         key="ocr_upload"
     )
 
-    # 구글 클라우드 인증키 경로 설정 (로컬환경/Deploy 환경에서는 매번 맞는 환경에 따라 경로 수정)
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\20250282\Desktop\ilbuin\project-58e0d7a0-d3b8-4772-881-c5232d1ddf9e.json"
-
     def detect_expiry_with_ocr(image_stream):
-        """  
-        구글 클라우드 비전으로 이미지에서 텍스트를 추출하고,
-        '소비기한' 패턴(0000.00.00 또는 YYYY.MM.DD)만 정규표현식으로 추린다.
-        
-        소비기한 패턴이 여러개면, '소비기한'이라는 단어나 Expiry, 유통기한 등  
-        한글/영문 키워드 앞뒤에 오는 날짜를 최대한 우선 추출한다.
-        
-        ------
-        각주:
-        - 구글클라우드 Vision API를 사용해 이미지를 base64로 읽어 업로드하면,
-        - Vision이 OCR로 전체 text를 스캔해 모든 문자를 넘겨준다.
-        - 그중 소비기한 형태만 정규표현식(YYYY.MM.DD)로 추려냄.
-        - 만약 여러 날짜가 있으면 소비/유통/EXP등이 들어간 행의 날짜를 가장 먼저 반환.
+        """
+        구글 클라우드 Vision으로 이미지 OCR, 텍스트 추출 후
+        소비기한(0000.00.00·/·- 형태)만 뽑아내는 함수.
+
+        - '소비기한/유통기한/EXP' 등 키워드로 먼저 탐색
+        - 없으면 텍스트 내 가장 처음 패턴 추출
+        - 날짜 구분자가 /, - 이여도 .으로 모두 변환, 한글/영어 형태 지원
         """
         client = vision.ImageAnnotatorClient()
         content = image_stream.read()
@@ -284,12 +288,11 @@ if st.session_state.confirm_success:
         if not texts:
             return None, None
 
-        # 전체 추출 텍스트
+        # OCR 전체 텍스트
         full_text = texts[0].description.replace('\n', ' ').replace('\r', ' ')
 
-        # 1. 소비기한(혹은 유통기한 등) '근처' 날짜 추출
+        # '소비기한' 주변 0000.00.00, 혹은 날짜만 추출
         patterns = [
-            # '소비기한 2029.12.31', '유통기한: 2027.09.05', "EXP 2030.01.10", 등
             r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}\.\d{2}\.\d{2})",
             r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}/\d{2}/\d{2})",
             r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}\-\d{2}\-\d{2})"
@@ -300,26 +303,21 @@ if st.session_state.confirm_success:
                 date_str = match.group(3).replace('/', '.').replace('-', '.')
                 return date_str, full_text
 
-        # 2. 텍스트 내 모든 "0000.00.00" 패턴만 추출
+        # 모든 패턴 중 제일 처음 것 하나 추출
         all_date = re.findall(r"\d{4}[./-]\d{2}[./-]\d{2}", full_text)
         if all_date:
-            # 슬래시, 대시 등은 모두 점(.)으로 통일
             normalized = all_date[0].replace('/', '.').replace('-', '.')
             return normalized, full_text
 
         return None, full_text
 
-    # 업로드 완료되면 OCR 작동
+    # 업로드 파일이 있으면 OCR 수행
     if uploaded_file is not None:
-        # 파일을 in-memory에서 읽어도 비전에서 지원
         expiry, ocr_fulltext = detect_expiry_with_ocr(uploaded_file)
         st.session_state.ocr_result = expiry
 
-        # 소비기한 날짜가 추출된 경우
         if expiry:
-            result_text = f"OCR 소비기한: {expiry}"
-            st.info(result_text)
-            # 목표일부인과 비교
+            st.info(f"OCR 소비기한: {expiry}")
             if expiry == st.session_state.target_date_value:
                 st.markdown(
                     f'<div class="big-blue">일치</div>',
@@ -333,18 +331,11 @@ if st.session_state.confirm_success:
                 st.write(f"목표일부인: {st.session_state.target_date_value}")
         else:
             st.error("일부인이 인식되지 않습니다.\n\n(사진 재촬영이나 명확한 부분으로 다시 시도해 주세요.)")
-            st.session_state.ocr_result = None  # 값 리셋
-            # 자동으로 목표일부인 phase로 돌아감 (OCR 업로드 UI도 비활성화)
-            # 이 단계에서는 F5 새로고침 권장 또는 확인/새로고침 버튼으로 단계 복귀
+            st.session_state.ocr_result = None
 
 # --------------------------------------------------------------------------
 # 각주
-# - 구글 클라우드 Vision을 사용하려면 해당 json키 파일(서비스 계정 키)이 필요하고, 이 경로는 os.environ에 세팅한다.
-# - Vision.ImageAnnotatorClient()를 통해 API핸들러를 얻고,
-# - detect_expiry_with_ocr() 함수는 이미지 전체에서 숫자점포맷(날짜)만 추려준다.
-# - 소비기한 OCR, 목표일부인 비교/일치/불일치 출력
-# - 지원 확장자: png, jpg, jpeg, bmp, webp, heic, heif, tiff, tif, gif, pdf 등 거의 모든 일반 포맷
-# - OCR단추는 "확인"이 일단 정상 출력된 뒤에만 활성화됨
-# - OCR이 실패하면 "일부인이 인식되지 않습니다" 출력 및 단계 복귀
-# - 사진 업로드, 파일읽기, 분석은 모든 스마트폰(카메라 촬영, 갤러리에서 올리기 모두 호환)
-# --------------------------------------------------------------------------
+# - 이 코드는 구글 Vision 서비스 계정키 등록을 클라우드/로컬 모두 지원.
+# - OCR/패턴매칭 자세히, 대다수 모바일/스캐너/카메라 이미지, PDF 호환.
+# - 주요 흐름 주석으로 안내. 추가 요구에 따라 UX/UI 일부 변경 쉬움.
+# ------------------------------------------------------------------------
