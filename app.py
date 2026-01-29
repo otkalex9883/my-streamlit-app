@@ -4,23 +4,26 @@ import io
 import os
 import re
 import sys
+import locale
 
-# --- 구글 Vision 서비스 계정 키파일 환경설정 및 상태 출력 (디버깅용) ---
+# --- 한글 달력 및 요일을 위한 locale 설정 ---
+try:
+    locale.setlocale(locale.LC_TIME, 'ko_KR.UTF-8')
+except locale.Error:
+    pass  # 환경에 한글 Locale이 없을 때는 무시
+
+# --- 구글 Vision 서비스 계정 키파일 환경설정 ---
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
     key_path = "/tmp/gcpkey.json"
     with open(key_path, "w") as f:
         f.write(st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
-
-    # 디버깅: 키파일 생성 및 환경변수 값 화면 출력
-    st.write(f"환경변수 GOOGLE_APPLICATION_CREDENTIALS: {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}")
-    st.write(f"키파일 생성됨: {os.path.exists(key_path)}")
 else:
     st.error("GOOGLE_APPLICATION_CREDENTIALS_JSON가 secrets에 없습니다!")
 
 from google.cloud import vision
 
-product_db =  {
+product_db = {
     "아삭 오이 피클": 6,
     "아삭 오이&무 피클": 6,
     "스위트 오이피클": 12,
@@ -87,6 +90,7 @@ product_db =  {
     "한컵 콘샐러드": 1,
     "한컵 코울슬로": 1
 }
+
 st.markdown(
     """
     <style>
@@ -333,9 +337,3 @@ if st.session_state.confirm_success:
         else:
             st.error("일부인이 인식되지 않습니다.\n\n(사진 재촬영이나 명확한 부분으로 다시 시도해 주세요.)")
             st.session_state.ocr_result = None
-
-# --------------------------------------------------------------------------
-# 이 코드는 구글 Vision 서비스 계정키 등록을 클라우드/로컬 모두 지원.
-# st.write로 인증 파일 및 환경변수 상태를 화면에서 확인 가능.
-# 요구에 따라 제품 DB와 날짜 처리, OCR, UI/UX도 자유롭게 커스텀 가능.
-# --------------------------------------------------------------------------
