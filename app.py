@@ -5,6 +5,16 @@ import os
 import re
 import sys
 
+# [1] Google Vision 키 환경설정
+# ==============================
+# 클라우드 환경: secrets 에서 json을 파일로 저장해 환경변수 등록
+if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
+    key_path = "/tmp/gcpkey.json"
+    with open(key_path, "w") as f:
+        f.write(st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
+# 로컬(Windows 등)에서는 필요에 따라 아래 줄 활성화(환경에 따라 수정)
+# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\20250282\Desktop\ilbuin\project-58e0d7a0-d3b8-4772-881-c5232d1ddf9e.json"
 from google.cloud import vision
 
 product_db =  {
@@ -76,16 +86,7 @@ product_db =  {
 }
 
 # ==============================
-# [1] Google Vision 키 환경설정
-# ==============================
-# 클라우드 환경: secrets 에서 json을 파일로 저장해 환경변수 등록
-if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
-    key_path = "/tmp/gcpkey.json"
-    with open(key_path, "w") as f:
-        f.write(st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
-# 로컬(Windows 등)에서는 필요에 따라 아래 줄 활성화(환경에 따라 수정)
-# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\20250282\Desktop\ilbuin\project-58e0d7a0-d3b8-4772-881-c5232d1ddf9e.json"
+
 
 st.markdown(
     """
