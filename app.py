@@ -5,7 +5,6 @@ import os
 import re
 import sys
 import locale
-from PIL import Image, ImageDraw  # 추가
 
 # --- 한글 달력 및 요일을 위한 locale 설정 ---
 try:
@@ -23,6 +22,7 @@ else:
     st.error("GOOGLE_APPLICATION_CREDENTIALS_JSON가 secrets에 없습니다!")
 
 from google.cloud import vision
+from PIL import Image, ImageDraw  # ------ 추가
 
 product_db = {
     "아삭 오이 피클": 6,
@@ -276,25 +276,15 @@ if st.session_state.confirm_success:
         key="ocr_upload"
     )
 
-    def normalize_expiry_date(date_str):
-        """
-        다양한 형태의 날짜 문자열을 '0000.00.00' 포맷으로 변환.
-        인식 가능한 형태:
-            - 0000.00.00 / 0000-00-00 / 0000/00/00
-            - 0000년00월00일
-        """
-        date_str = date_str.strip()
-        match = re.match(r"(\d{4})[./-](\d{2})[./-](\d{2})", date_str)
-        if match:
-            return f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
-        match_kor = re.match(r"(\d{4})\s*년\s*(\d{2})\s*월\s*(\d{2})\s*일", date_str)
-        if match_kor:
-            return f"{match_kor.group(1)}.{match_kor.group(2)}.{match_kor.group(3)}"
-        return date_str
-
     def detect_expiry_with_ocr(image_stream):
         """
-        OCR로 인식된 날짜 문자열(norm), 전체텍스트, 그리고 해당 바운딩박스 좌표를 반환
+        구글 클라우드 Vision으로 이미지 OCR, 텍스트 추출 후
+        소비기한(0000.00.00·/·- 형태)만 뽑아내는 함수.
+
+        - '소비기한/유통기한/EXP' 등 키워드로 먼저 탐색
+        - 없으면 텍스트 내 가장 처음 패턴 추출
+        - 날짜 구분자가 /, - 이여도 .으로 모두 변환, 한글/영어 형태 지원
+        - ----- 반환값에 bounding box 정보 포함 (O)
         """
         client = vision.ImageAnnotatorClient()
         content = image_stream.read()
@@ -305,75 +295,111 @@ if st.session_state.confirm_success:
         if not texts:
             return None, None, None
 
+        # OCR 전체 텍스트
         full_text = texts[0].description.replace('\n', ' ').replace('\r', ' ')
 
-        # 날짜 패턴 인식
+        # 날짜 패턴 목록 (정규표현식)
         patterns = [
-            # 0000.00.00, 0000/00/00, 0000-00-00
-            (r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}[./-]\d{2}[./-]\d{2})", 3),
-            # 0000년00월00일
-            (r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}\s*년\s*\d{2}\s*월\s*\d{2}\s*일)", 3)
+            r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}\.\d{2}\.\d{2})",
+            r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}/\d{2}/\d{2})",
+            r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}\-\d{2}\-\d{2})"
         ]
-        wanted_raw = None
-        for patt, idx in patterns:
+        # 텍스트 annotation에서 개별 단어별로 bounding box 포함되어 있음
+        # texts[0]=전체, texts[1:]=각 단어별
+
+        # 키워드와 함께 인식된 날짜 패턴의 날짜 부분을 찾아보자
+        expiry_date_str = None
+        matched_txt = None
+        bbox = None
+
+        for patt in patterns:
             match = re.search(patt, full_text)
             if match:
-                wanted_raw = match.group(idx)
+                date_str = match.group(3).replace('/', '.').replace('-', '.')
+                expiry_date_str = date_str
+                matched_txt = match.group(3)
                 break
 
-        # 모든 숫자형 날짜중 첫번째
-        if wanted_raw is None:
+        if expiry_date_str is None:
+            # 키워드 기반이 없으면, 전체 텍스트에서 맨앞 포맷을 추출
             all_date = re.findall(r"\d{4}[./-]\d{2}[./-]\d{2}", full_text)
             if all_date:
-                wanted_raw = all_date[0]
+                normalized = all_date[0].replace('/', '.').replace('-', '.')
+                expiry_date_str = normalized
+                matched_txt = all_date[0]
 
-        # 모든 '0000년00월00일' 패턴 중 첫번째
-        if wanted_raw is None:
-            all_kordate = re.findall(r"\d{4}\s*년\s*\d{2}\s*월\s*\d{2}\s*일", full_text)
-            if all_kordate:
-                wanted_raw = all_kordate[0]
+        # bbox는 texts[1:]의 description이 실제 텍스트 단위(단어, 숫자)와 일치
+        if expiry_date_str and matched_txt:
+            # texts[1:]에서 matched_txt와 같은 description을 최대한 정확히 찾아야 함
+            # matched_txt와 완전히 일치하는 description이 있으면 그 bbox를 씀
+            candidates = []
+            for t in texts[1:]:
+                t_desc = t.description
+                if t_desc == matched_txt:
+                    bbox = t.bounding_poly.vertices
+                    break
+                # 날짜가 공백 없이 써져 있지 않은 경우 분해된 블럭 여러 개일 수 있음
+                # ex) "2023.12.31" → [2023, ., 12, ., 31]
+                # 그러면 여러 description을 더해가며 일치하는지 검사
+            if not bbox:
+                all_texts = [t.description for t in texts[1:]]
+                # 날짜 형태의 구성요소 모으기
+                date_clean = re.sub(r"[./-]", " ", matched_txt)
+                target_parts = date_clean.split()
+                idx = 0
+                while idx <= len(all_texts) - len(target_parts):
+                    window = all_texts[idx:idx+len(target_parts)]
+                    join_window = "".join(window)
+                    join_target = "".join(target_parts)
+                    if join_window == join_target:
+                        # bbox는 window 구간 전체의 bbox를 합친 외접 사각형
+                        verts = []
+                        for i in range(idx, idx+len(target_parts)):
+                            verts.extend([
+                                (v.x, v.y) for v in texts[i+1].bounding_poly.vertices
+                            ])
+                        xs = [v[0] for v in verts]
+                        ys = [v[1] for v in verts]
+                        minx, maxx = min(xs), max(xs)
+                        miny, maxy = min(ys), max(ys)
+                        bbox = [
+                            type(texts[1].bounding_poly.vertices[0])(x=minx, y=miny),
+                            type(texts[1].bounding_poly.vertices[0])(x=maxx, y=miny),
+                            type(texts[1].bounding_poly.vertices[0])(x=maxx, y=maxy),
+                            type(texts[1].bounding_poly.vertices[0])(x=minx, y=maxy)
+                        ]
+                        break
+                    idx += 1
+            # 못 찾은 경우 None
 
-        norm = normalize_expiry_date(wanted_raw) if wanted_raw else None
-
-        # 바운딩박스 탐색 (texts[1:]에 각 단어/문자열 위치정보가 있음)
-        expiry_box = None
-        if wanted_raw:
-            ref = wanted_raw.replace(' ', '').replace('.', '').replace('-', '').replace('/', '')\
-                                    .replace('년', '').replace('월', '').replace('일', '')
-            min_dist = float('inf')
-            for txt in texts[1:]:
-                value = txt.description.replace(' ', '').replace('.', '').replace('-', '').replace('/', '')\
-                                       .replace('년', '').replace('월', '').replace('일', '')
-                if value and ref in value:
-                    if len(value) < min_dist:
-                        expiry_box = txt.bounding_poly
-                        min_dist = len(value)
-        return norm, full_text, expiry_box
-
-    def draw_bounding_box(image_stream, bounding_poly):
-        """
-        PIL을 이용해 원본 업로드 이미지를 열고,
-        bounding_poly(구글 Poly좌표 4개) 기준으로 빨간 네모박스를 그려 반환.
-        """
-        image_stream.seek(0)
-        pil_img = Image.open(image_stream).convert("RGB")
-        draw = ImageDraw.Draw(pil_img)
-        if bounding_poly:
-            points = [(vertex.x, vertex.y) for vertex in bounding_poly.vertices]
-            if len(points) == 4:
-                draw.line(points + [points[0]], width=4, fill=(220, 20, 60))
-        return pil_img
+        return expiry_date_str, full_text, bbox
 
     # 업로드 파일이 있으면 OCR 수행
     if uploaded_file is not None:
-        expiry, ocr_fulltext, expiry_box = detect_expiry_with_ocr(uploaded_file)
+        # 이미지는 파일로부터 메모리 버퍼를 얻어서 다시 읽어와야 함
+        uploaded_file.seek(0)
+        raw_image = Image.open(uploaded_file).convert("RGB")
+        uploaded_file.seek(0)
+
+        expiry, ocr_fulltext, bbox = detect_expiry_with_ocr(uploaded_file)
         st.session_state.ocr_result = expiry
 
         if expiry:
-            # 원본 이미지와 붉은 네모 표시
-            uploaded_file.seek(0)
-            annotated_img = draw_bounding_box(uploaded_file, expiry_box)
             st.info(f"OCR 소비기한: {expiry}")
+            if bbox:
+                # 빨간색 네모 박스 그리기
+                img_copy = raw_image.copy()
+                draw = ImageDraw.Draw(img_copy)
+                # bbox는 4개 꼭짓점, [(x1, y1), (x2, y2), ...]
+                box = [(v.x, v.y) for v in bbox]
+                draw.line(box + [box[0]], fill=(255,0,0), width=5)
+                # 적당히 리사이즈 (넓이 380px 맞춤)
+                max_width = 380
+                w, h = img_copy.size
+                if w > max_width:
+                    scale = max_width / w
+                    img_copy = img_copy.resize((int(w*scale), int(h*scale)))
+                st.image(img_copy, caption="인식된 소비기한 영역", use_column_width=True)
             if expiry == st.session_state.target_date_value:
                 st.markdown(
                     f'<div class="big-blue">일치</div>',
@@ -384,4 +410,7 @@ if st.session_state.confirm_success:
                     f'<div class="big-red">불일치</div>',
                     unsafe_allow_html=True
                 )
-                st.write(f"목표일부인: {st.session_state
+                st.write(f"목표일부인: {st.session_state.target_date_value}")
+        else:
+            st.error("일부인이 인식되지 않습니다.\n\n(사진 재촬영이나 명확한 부분으로 다시 시도해 주세요.)")
+            st.session_state.ocr_result = None
