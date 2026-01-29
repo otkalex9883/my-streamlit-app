@@ -24,70 +24,6 @@ else:
 from google.cloud import vision
 
 product_db = {
-    "아삭 오이 피클": 6,
-    "아삭 오이&무 피클": 6,
-    "스위트 오이피클": 12,
-    "오'쉐프 슬라이스 오이피클": 6,
-    "오'쉐프 오미자 믹스피클": 6,
-    "쏘렌토 후레쉬 오이피클": 3,
-    "믹스피클(제너시스)": 3,
-    "믹스피클(프레시지)": 4,
-    "오뚜기 딸기쨈 (일회용)": 6,
-    "맥도날드 딸기토핑": 6,
-    "딸기쨈": 24,
-    "딸기잼(10kg 캔)": 4,
-    "맛있는 딸기잼": 24,
-    "후루츠쨈": 24,
-    "포도쨈": 24,
-    "사과쨈": 24,
-    "블루베리쨈": 24,
-    "제주한라봉마말레이드": 24,
-    "LIGHT&JOY 당을 줄인 논산딸기쨈": 12,
-    "LIGHT&JOY 당을 줄인 김천자두쨈": 12,
-    "LIGHT&JOY 당을 줄인 청송사과쨈": 12,
-    "애플시나몬쨈(트레이더스)": 18,
-    "Light Sugar 딸기쨈(조흥)": 3,
-    "Light Sugar 사과쨈(조흥)": 3,
-    "제주청귤마말레이드": 12,
-    "메이플시럽(제이앤이)": 12,
-    "딸기버터쨈": 10,
-    "앙버터쨈": 10,
-    "돼지불고기양념": 18,
-    "돼지갈비양념": 18,
-    "소불고기양념": 18,
-    "소갈비양념": 18,
-    "간장찜닭양념": 18,
-    "닭볶음탕양념": 18,
-    "프레스코 토마토 파스타소스": 12,
-    "검시럽(롯데리아)": 9,
-    "오쉐프 메이플시럽 디스펜팩": 6,
-    "오'쉐프 초코 소스": 6,
-    "오뚜기 딸기쨈 (디스펜팩)": 6,
-    "KFC 딸기쨈 (디스펜팩)": 6,
-    "엔제리너스 딸기쨈 (디스펜팩)": 6,
-    "에그드랍 딸기잼": 6,
-    "딸기잼(스타벅스)": 6,
-    "스위트앤사워소스(대만 맥도날드)": 4,
-    "스위트앤젤 복숭아": 6,
-    "스위트앤젤 파인": 6,
-    "스위트앤젤 밀감": 6,
-    "피코크젤리 복숭아": 6,
-    "피코크젤리 망고": 6,
-    "피코크젤리 포도": 6,
-    "오'쉐프 떠먹는 샤인머스캣": 6,
-    "오'쉐프 떠먹는 애플망고": 6,
-    "콘샐러드(뉴욕버거)": 1,
-    "오늘의 샐러드 콘샐러드": 1,
-    "콘샐러드(파파존스)": 1,
-    "콘샐러드(프랭크버거)": 1,
-    "콘샐러드(피자헛)": 1,
-    "콘샐러드(맘스터치)": 1,
-    "오늘의 샐러드 코울슬로": 1,
-    "코울슬로(맥도날드)": 1,
-    "코울슬로(파파존스)": 1,
-    "코울슬로(프랭크버거)": 1,
-    "코울슬로(피자헛)": 1,
-    "한컵 콘샐러드": 1,
     "한컵 코울슬로": 1
 }
 
@@ -275,14 +211,33 @@ if st.session_state.confirm_success:
         key="ocr_upload"
     )
 
+    def normalize_expiry_date(date_str):
+        """
+        다양한 형태의 날짜 문자열을 '0000.00.00' 포맷으로 변환.
+        인식 가능한 형태:
+            - 0000.00.00 / 0000-00-00 / 0000/00/00
+            - 0000년00월00일
+        """
+        date_str = date_str.strip()
+        # 1. 0000.00.00, 0000-00-00, 0000/00/00 → .으로 변환
+        match = re.match(r"(\d{4})[./-](\d{2})[./-](\d{2})", date_str)
+        if match:
+            return f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
+
+        # 2. '0000년00월00일' 케이스 (공백 없어도 됨)
+        match_kor = re.match(r"(\d{4})\s*년\s*(\d{2})\s*월\s*(\d{2})\s*일", date_str)
+        if match_kor:
+            return f"{match_kor.group(1)}.{match_kor.group(2)}.{match_kor.group(3)}"
+
+        # 3. 추후 다른 패턴 확장 자리 (코드 유지보수/추가 용이)
+        # 새 패턴이 필요하면 여기에 elif/return 추가
+
+        return date_str  # 인식 실패시 원문 반환
+
     def detect_expiry_with_ocr(image_stream):
         """
         구글 클라우드 Vision으로 이미지 OCR, 텍스트 추출 후
-        소비기한(0000.00.00·/·- 형태)만 뽑아내는 함수.
-
-        - '소비기한/유통기한/EXP' 등 키워드로 먼저 탐색
-        - 없으면 텍스트 내 가장 처음 패턴 추출
-        - 날짜 구분자가 /, - 이여도 .으로 모두 변환, 한글/영어 형태 지원
+        다양한 패턴의 소비기한을 '0000.00.00' 포맷으로 변환해 반환.
         """
         client = vision.ImageAnnotatorClient()
         content = image_stream.read()
@@ -296,22 +251,29 @@ if st.session_state.confirm_success:
         # OCR 전체 텍스트
         full_text = texts[0].description.replace('\n', ' ').replace('\r', ' ')
 
-        # '소비기한' 주변 0000.00.00, 혹은 날짜만 추출
+        # 패턴 목록: (정규식, group index)
         patterns = [
-            r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}\.\d{2}\.\d{2})",
-            r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}/\d{2}/\d{2})",
-            r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}\-\d{2}\-\d{2})"
+            # 0000.00.00, 0000/00/00, 0000-00-00
+            (r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}[./-]\d{2}[./-]\d{2})", 3),
+            # 0000년00월00일
+            (r"(소비기한|유통기한|EXP(iry)?\s*[:\s\-]?\s*)(\d{4}\s*년\s*\d{2}\s*월\s*\d{2}\s*일)", 3),
         ]
-        for patt in patterns:
+        for patt, idx in patterns:
             match = re.search(patt, full_text)
             if match:
-                date_str = match.group(3).replace('/', '.').replace('-', '.')
-                return date_str, full_text
+                norm = normalize_expiry_date(match.group(idx))
+                return norm, full_text
 
-        # 모든 패턴 중 제일 처음 것 하나 추출
+        # 3. 모든 숫자형 날짜중 첫번째
         all_date = re.findall(r"\d{4}[./-]\d{2}[./-]\d{2}", full_text)
         if all_date:
-            normalized = all_date[0].replace('/', '.').replace('-', '.')
+            normalized = normalize_expiry_date(all_date[0])
+            return normalized, full_text
+
+        # 4. 모든 '0000년00월00일' 패턴 중 첫번째
+        all_kordate = re.findall(r"\d{4}\s*년\s*\d{2}\s*월\s*\d{2}\s*일", full_text)
+        if all_kordate:
+            normalized = normalize_expiry_date(all_kordate[0])
             return normalized, full_text
 
         return None, full_text
