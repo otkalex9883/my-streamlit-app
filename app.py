@@ -267,7 +267,7 @@ if reset:
 # --------- OCR 업로드 UI (목표 일부인 출력 이후에만 활성화) ---------
 if st.session_state.confirm_success:
     st.markdown("---")
-    st.write("## 📸 포장 소비기한 OCR 판독")
+    st.write("## 📸 소비기한 OCR 판독")
     uploaded_file = st.file_uploader(
         "사진을 업로드하거나, 직접 촬영하세요.",
         type=["png","jpg","jpeg","bmp","webp","heic","heif","tiff","tif","gif","pdf"],
